@@ -60,6 +60,7 @@ fi
 if [ -d "$REPO_ROOT/assets" ]; then
   log "RUN: rsync assets/ -> ec2-user@$INSTANCE_IP:/home/ec2-user/.relic/assets/"
   rsync -avz --delete \
+    --exclude 'node_modules/' \
     -e "ssh $SSH_OPTS" \
     "$REPO_ROOT/assets/" \
     "ec2-user@$INSTANCE_IP:/home/ec2-user/.relic/assets/"
