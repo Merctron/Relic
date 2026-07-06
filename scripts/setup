@@ -1,30 +1,54 @@
 #!/usr/bin/env bash
 # Runs ON the remote host after assets are synced.
-# Installs cron jobs and starts persistent processes defined in ~/.relic/config/.
+# Installs cron jobs and starts persistent processes.
 set -euo pipefail
 
 RELIC_DIR="$HOME/.relic"
 CONFIG_DIR="$RELIC_DIR/config"
+BOT_DIR="$RELIC_DIR/assets/bot"
 
 log() { echo "[$(date '+%H:%M:%S')] [setup] $*"; }
 
+# ── Node via NVM ──────────────────────────────────────────────────────────────
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"
+nvm use 20
+log "Node: $(node --version)  npm: $(npm --version)"
+
+# ── pm2 ───────────────────────────────────────────────────────────────────────
+log "Installing pm2..."
+npm install -g pm2 --silent
+log "pm2: $(pm2 --version)"
+
 # ── Cron jobs ─────────────────────────────────────────────────────────────────
 if [ -f "$CONFIG_DIR/crontab" ]; then
-  log "Installing crontab from $CONFIG_DIR/crontab..."
+  log "Installing crontab..."
   crontab "$CONFIG_DIR/crontab"
-  log "Crontab installed:"
   crontab -l | sed 's/^/  /'
 else
   log "No $CONFIG_DIR/crontab found, skipping cron setup"
 fi
 
-# ── Persistent processes ──────────────────────────────────────────────────────
-if [ -f "$CONFIG_DIR/start.sh" ]; then
-  log "Running $CONFIG_DIR/start.sh..."
-  bash "$CONFIG_DIR/start.sh"
-  log "start.sh complete"
+# ── Discord bot ───────────────────────────────────────────────────────────────
+if [ ! -d "$BOT_DIR" ]; then
+  log "No bot directory found at $BOT_DIR, skipping bot startup"
 else
-  log "No $CONFIG_DIR/start.sh found, skipping process startup"
+  ENV_FILE="$CONFIG_DIR/.env"
+  if [ ! -f "$ENV_FILE" ]; then
+    log "ERROR: $ENV_FILE not found — bot requires DISCORD_TOKEN"
+    exit 1
+  fi
+
+  log "Installing bot dependencies..."
+  (cd "$BOT_DIR" && npm install --silent)
+
+  log "Starting bot with pm2..."
+  set -a && source "$ENV_FILE" && set +a
+  pm2 delete relic-bot 2>/dev/null || true
+  pm2 start node --name relic-bot -- "$BOT_DIR/index.js"
+  pm2 save
+  log "Bot started. Status:"
+  pm2 show relic-bot | sed 's/^/  /'
 fi
 
 log "Setup complete"
