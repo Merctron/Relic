@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Open an SSH session to the Relic instance.
+# Usage: ./scripts/ssh [aws-profile]
+set -euo pipefail
+
+PROFILE="${1:-default}"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+INSTANCE_IP=$(aws cloudformation describe-stacks \
+  --stack-name RelicStack \
+  --profile "$PROFILE" \
+  --query "Stacks[0].Outputs[?OutputKey=='InstancePublicIp'].OutputValue" \
+  --output text)
+
+exec ssh -i "$REPO_ROOT/relic.pem" \
+  -o StrictHostKeyChecking=no \
+  ec2-user@"$INSTANCE_IP"

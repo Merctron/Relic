@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Runs ON the remote host after assets are synced.
+# Installs cron jobs and starts persistent processes defined in ~/.relic/config/.
+set -euo pipefail
+
+RELIC_DIR="$HOME/.relic"
+CONFIG_DIR="$RELIC_DIR/config"
+
+log() { echo "[$(date '+%H:%M:%S')] [setup] $*"; }
+
+# ── Cron jobs ─────────────────────────────────────────────────────────────────
+if [ -f "$CONFIG_DIR/crontab" ]; then
+  log "Installing crontab from $CONFIG_DIR/crontab..."
+  crontab "$CONFIG_DIR/crontab"
+  log "Crontab installed:"
+  crontab -l | sed 's/^/  /'
+else
+  log "No $CONFIG_DIR/crontab found, skipping cron setup"
+fi
+
+# ── Persistent processes ──────────────────────────────────────────────────────
+if [ -f "$CONFIG_DIR/start.sh" ]; then
+  log "Running $CONFIG_DIR/start.sh..."
+  bash "$CONFIG_DIR/start.sh"
+  log "start.sh complete"
+else
+  log "No $CONFIG_DIR/start.sh found, skipping process startup"
+fi
+
+log "Setup complete"

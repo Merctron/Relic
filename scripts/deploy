@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Deploy the Relic CDK stack, then push private config/ and assets/ to the instance.
+#
+# Usage: ./scripts/deploy [aws-profile]
+#   Requires: relic.pem in repo root (run scripts/get-key first if missing)
+#             config/ and assets/ directories in repo root (gitignored)
+set -euo pipefail
+
+PROFILE="${1:-default}"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+log() { echo "[$(date '+%H:%M:%S')] $*" >&2; }
+
+# ── 1. Deploy infra ──────────────────────────────────────────────────────────
+log "Deploying CDK stack (profile=$PROFILE)..."
+log "RUN: npx cdk deploy --require-approval never --profile $PROFILE"
+(cd "$REPO_ROOT/cdk" && npx cdk deploy --require-approval never --profile "$PROFILE")
+
+# ── 2. Fetch SSH key if missing ───────────────────────────────────────────────
+if [ ! -f "$REPO_ROOT/relic.pem" ]; then
+  log "relic.pem not found — fetching from SSM..."
+  log "RUN: scripts/get-key $PROFILE"
+  "$REPO_ROOT/scripts/get-key" "$PROFILE"
+fi
+
+# ── 3. Resolve instance IP ───────────────────────────────────────────────────
+log "Fetching instance IP from CloudFormation..."
+log "RUN: aws cloudformation describe-stacks --stack-name RelicStack ..."
+INSTANCE_IP=$(aws cloudformation describe-stacks \
+  --stack-name RelicStack \
+  --profile "$PROFILE" \
+  --query "Stacks[0].Outputs[?OutputKey=='InstancePublicIp'].OutputValue" \
+  --output text)
+log "Instance IP: $INSTANCE_IP"
+
+SSH_OPTS="-i $REPO_ROOT/relic.pem -o StrictHostKeyChecking=no -o ConnectTimeout=5"
+
+# ── 4. Wait for SSH ───────────────────────────────────────────────────────────
+log "Waiting for SSH on $INSTANCE_IP..."
+ATTEMPT=0
+until ssh $SSH_OPTS ec2-user@"$INSTANCE_IP" true 2>/tmp/relic-ssh-err; do
+  ATTEMPT=$((ATTEMPT + 1))
+  log "  attempt $ATTEMPT — $(cat /tmp/relic-ssh-err), retrying in 5s..."
+  sleep 5
+done
+log "SSH reachable after $ATTEMPT attempt(s)"
+
+# ── 5. Push config/ ──────────────────────────────────────────────────────────
+if [ -d "$REPO_ROOT/config" ]; then
+  log "RUN: rsync config/ -> ec2-user@$INSTANCE_IP:/home/ec2-user/.relic/config/"
+  rsync -avz --delete \
+    -e "ssh $SSH_OPTS" \
+    "$REPO_ROOT/config/" \
+    "ec2-user@$INSTANCE_IP:/home/ec2-user/.relic/config/"
+else
+  log "No config/ directory, skipping"
+fi
+
+# ── 6. Push assets/ ──────────────────────────────────────────────────────────
+if [ -d "$REPO_ROOT/assets" ]; then
+  log "RUN: rsync assets/ -> ec2-user@$INSTANCE_IP:/home/ec2-user/.relic/assets/"
+  rsync -avz --delete \
+    -e "ssh $SSH_OPTS" \
+    "$REPO_ROOT/assets/" \
+    "ec2-user@$INSTANCE_IP:/home/ec2-user/.relic/assets/"
+else
+  log "No assets/ directory, skipping"
+fi
+
+# ── 7. Run setup on host ──────────────────────────────────────────────────────
+log "RUN: scripts/setup on host..."
+rsync -avz \
+  -e "ssh $SSH_OPTS" \
+  "$REPO_ROOT/scripts/setup" \
+  "ec2-user@$INSTANCE_IP:/home/ec2-user/.relic/setup"
+ssh $SSH_OPTS ec2-user@"$INSTANCE_IP" "bash /home/ec2-user/.relic/setup"
+
+log "Done. Connect with:"
+log "  ssh -i relic.pem ec2-user@$INSTANCE_IP"

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Fetch the EC2 private key from SSM and write it to relic.pem (gitignored).
+# Usage: ./scripts/get-key [aws-profile]
+set -euo pipefail
+
+PROFILE="${1:-default}"
+PARAM_NAME=$(aws cloudformation describe-stacks \
+  --stack-name RelicStack \
+  --profile "$PROFILE" \
+  --query "Stacks[0].Outputs[?OutputKey=='SshKeyParameterName'].OutputValue" \
+  --output text)
+
+aws ssm get-parameter \
+  --name "$PARAM_NAME" \
+  --with-decryption \
+  --profile "$PROFILE" \
+  --query "Parameter.Value" \
+  --output text > relic.pem
+
+chmod 600 relic.pem
+echo "Key written to relic.pem" >&2
